@@ -1,87 +1,54 @@
-<!-- index.html -->
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
   <title>Guess the Hungarian Town!</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
-  <style>
-    body { margin: 0; font-family: sans-serif; overflow: hidden; }
-    #map { position: absolute; top: 50px; bottom: 0; width: 100%; }
-    #topbar {
-      position: absolute; top: 0; left: 0; right: 0;
-      height: 50px; background: #333; color: #fff;
-      display: flex; align-items: center; padding: 0 1rem;
-      z-index: 1000;
-    }
-    #topbar h1 { font-size: 1.2rem; margin: 0; }
-    #currentTownDisplay {
-      font-size: 1rem; margin-left: 2rem;
-      color: #ffeb3b;
-    }
-    #topbar button {
-      background: #555; border: none; color: #fff;
-      padding: 0.5rem 1rem; margin-left: 0.5rem;
-      cursor: pointer; border-radius: 4px;
-    }
-    #settings {
-      position: absolute; top: 50px; right: -320px;
-      width: 320px; bottom: 0; background: #f4f4f4;
-      box-shadow: -2px 0 5px rgba(0,0,0,0.3);
-      padding: 1rem; transition: right 0.3s;
-      overflow-y: auto; z-index: 1000;
-    }
-    #settings.open { right: 0; }
-    #settings h2 { margin-top: 0; }
-    #settings label { display: block; margin: 0.5rem 0 0.2rem; }
-    #settings input[type="number"] {
-      width: 100%; padding: 0.3rem; box-sizing: border-box;
-    }
-    #settings .toggle {
-      display: flex; align-items: center; margin: 0.5rem 0;
-    }
-    #settings .toggle input { margin-right: 0.5rem; }
-    #info {
-      position: absolute; bottom: 10px; left: 10px;
-      background: rgba(255,255,255,0.9); padding: 0.5rem;
-      border-radius: 4px; z-index: 1000;
-    }
-    #roundInfo { margin-top: 0.2rem; font-weight: bold; }
-    .distance-label { background: rgba(255,255,255,0.7); padding: 2px 4px; border-radius: 3px; }
-  </style>
+  <link rel="stylesheet" href="style.css" />
 </head>
 <body>
 
   <div id="topbar">
-    <h1>Guess the Hungarian Town</h1>
-    <div id="currentTownDisplay">Guess: <strong id="townName">–</strong></div>
-    <button id="btnSettings">Settings ⚙️</button>
-    <button id="btnStart">Start ▶️</button>
+    <h1 data-i18n="title">Guess the Hungarian Town</h1>
+    <div id="currentTownDisplay">
+      <span data-i18n="guess">Guess:</span> <strong id="townName">–</strong>
+    </div>
+    <button id="btnSettings" data-i18n="settings">Settings ⚙️</button>
+    <button id="btnStart" data-i18n="start">Start ▶️</button>
+    <button id="btnNext" class="next-btn" disabled data-i18n="next">Next Round ➡️</button>
   </div>
 
   <div id="settings">
-    <h2>Settings</h2>
-    <label for="inpPlayers">Number of Players (1–20)</label>
+    <h2 data-i18n="settings">Settings</h2>
+    <label for="inpPlayers" data-i18n="numPlayers">Number of Players (1–20)</label>
     <input id="inpPlayers" type="number" min="1" max="20" value="2" />
 
-    <label for="inpRounds">Number of Rounds</label>
+    <label for="inpRounds" data-i18n="numRounds">Number of Rounds</label>
     <input id="inpRounds" type="number" min="1" max="100" value="10" />
 
     <div class="toggle">
       <input id="chkBoundary" type="checkbox" checked />
-      <label for="chkBoundary">Show Town Boundary</label>
+      <label for="chkBoundary" data-i18n="showBoundary">Show Town Boundary</label>
     </div>
     <div class="toggle">
       <input id="chkDistance" type="checkbox" checked />
-      <label for="chkDistance">Show Distance Feedback</label>
+      <label for="chkDistance" data-i18n="showDistance">Show Distance Feedback</label>
     </div>
-    <button id="btnApply">Apply & Close</button>
+
+    <!-- LANGUAGE SELECTOR -->
+    <label for="selLang" data-i18n="language">Language</label>
+    <select id="selLang">
+      <option value="en">English</option>
+      <option value="hu">Magyar</option>
+    </select>
+
+    <button id="btnApply" data-i18n="apply">Apply & Close</button>
   </div>
 
   <div id="map"></div>
 
   <div id="info">
-    <div>Player <span id="playerNum">–</span>'s turn</div>
+    <div><span data-i18n="player">Player</span> <span id="playerNum">–</span>'<span data-i18n="sTurn">s turn</span></div>
     <div id="roundInfo">Round – of –</div>
     <div id="feedback"></div>
     <div id="scoreboard"></div>
@@ -89,6 +56,7 @@
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://unpkg.com/osmtogeojson@3.0.0/dist/osmtogeojson.js"></script>
+  <script src="translations.js"></script>
   <script src="script.js"></script>
 
 </body>

@@ -1,190 +1,304 @@
 // script.js
 
-// ── CONFIG ─────────────────────────────────────────────────────
-const geoNamesUsername = "YOUR_GEONAMES_USERNAME"; // ← replace with your GeoNames username
-
-// ── STATE ──────────────────────────────────────────────────────
+// ── CONFIG / STATE ───────────────────────────────────────────
 let allTowns = [], availableTowns = [];
 let currentTown = null, townBoundary = null;
-
-let map, guessMarker, actualMarker, boundaryLayer, lineLayer;
+let map, guessMarker, actualMarker, boundaryLayer, guessBoundaryLayer, lineLayer;
 let numPlayers = 2, currentPlayer = 0;
-let numRounds = 10, currentRound = 0;
+let numRounds = 10, currentRound = 1;
 let scores = [];
 let showBoundary = true, showDistance = true;
+let dataLoaded = false;
+let lastDist = null;  // for re-translation of feedback
 
-// ── UTILITIES ──────────────────────────────────────────────────
-function toRad(d){ return d * Math.PI/180; }
-function distanceKm(a,b,c,d){
-  const R = 6371, Δφ = toRad(c-a), Δλ = toRad(d-b);
-  const A = Math.sin(Δφ/2)**2 +
-            Math.cos(toRad(a)) * Math.cos(toRad(c)) *
-            Math.sin(Δλ/2)**2;
-  return R * 2 * Math.atan2(Math.sqrt(A), Math.sqrt(1-A));
-}
-function updateScoreboard(){
-  document.getElementById("scoreboard").innerHTML =
-    scores.map((s,i)=>`Player ${i+1}: ${s.toFixed(2)} km`).join("<br>");
-}
-function updateRoundInfo(){
-  document.getElementById("roundInfo").textContent =
-    `Round ${currentRound} of ${numRounds}`;
+// ── TRANSLATION LOADER ────────────────────────────────────────
+let translations = window.translations || {};
+let currentLang = 'en';
+
+function t(key, vars = {}) {
+  let str = translations[currentLang]?.[key]
+         ?? translations['en']?.[key]
+         ?? key;
+  return str.replace(/\{\{(\w+)\}\}/g, (_, v) => vars[v] ?? '');
 }
 
-// ── PICK A NEW TOWN ────────────────────────────────────────────
-function pickTown(){
+function applyTranslations() {
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    let key = el.getAttribute('data-i18n');
+    el.textContent = t(key);
+  });
+  updateRoundInfo();
+  updateScoreboard();
+}
+
+// ── UTILITIES ─────────────────────────────────────────────────
+function toRad(d) { return d * Math.PI / 180; }
+function distanceKm(a,b,c,d) {
+  const R = 6371,
+        Δφ = toRad(c - a),
+        Δλ = toRad(d - b),
+        A = Math.sin(Δφ/2)**2 +
+            Math.cos(toRad(a)) * Math.cos(toRad(c)) * Math.sin(Δλ/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(A), Math.sqrt(1 - A));
+}
+
+function updateScoreboard() {
+  document.getElementById('scoreboard').innerHTML =
+    scores.map((s,i) =>
+      `${t('player')} ${i+1}: ${s.toFixed(2)} km`
+    ).join("<br>");
+}
+
+function updateRoundInfo() {
+  document.getElementById('roundInfo').textContent =
+    t('roundInfo', { current: currentRound, total: numRounds });
+}
+
+// ── LOADING OVERLAY ───────────────────────────────────────────
+const loading = document.createElement('div');
+loading.id = 'loadingOverlay';
+loading.innerHTML = `<div class="spinner"></div><p>${t('loadingTowns')}</p>`;
+Object.assign(loading.style, {
+  position:'fixed', top:0, left:0, right:0, bottom:0,
+  background:'rgba(0,0,0,0.5)', color:'#fff',
+  display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center',
+  zIndex:10000
+});
+const spinner = loading.querySelector('.spinner');
+Object.assign(spinner.style, {
+  width:'50px', height:'50px', border:'6px solid #ccc',
+  borderTop:'6px solid #fff', borderRadius:'50%', animation:'spin 1s linear infinite'
+});
+document.head.insertAdjacentHTML('beforeend',`
+  <style>@keyframes spin{to{transform:rotate(360deg);}}</style>
+`);
+document.body.appendChild(loading);
+
+function finishLoading() {
+  dataLoaded = true;
+  availableTowns = allTowns.slice();
+  document.getElementById('btnStart').disabled = false;
+  loading.style.display = 'none';
+}
+
+// ── FETCH TOWN LIST VIA OVERPASS ──────────────────────────────
+const endpoints = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.openstreetmap.ru/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter'
+];
+
+function tryFetchTowns(i = 0) {
+  if (i >= endpoints.length) {
+    alert(t('loadError'));
+    return;
+  }
+  fetch(endpoints[i], {
+    method:'POST',
+    headers:{'Content-Type':'text/plain'},
+    body: `
+      [out:json][timeout:60];
+      area["ISO3166-1"="HU"][admin_level=2]->.c;
+      (
+        node["place"~"city|town"](area.c);
+        way["place"~"city|town"](area.c);
+        relation["place"~"city|town"](area.c);
+      );
+      out center;
+    `
+  })
+  .then(r => { if (!r.ok) throw new Error(r.status); return r.json(); })
+  .then(data => {
+    allTowns = data.elements.map(el => ({
+      name: el.tags.name,
+      lat: el.center?.lat ?? el.lat,
+      lng: el.center?.lon ?? el.lon,
+      osm_id: el.id,
+      osm_type: el.type
+    }));
+    finishLoading();
+  })
+  .catch(() => tryFetchTowns(i+1));
+}
+tryFetchTowns();
+
+// ── PICK A NEW TOWN & FETCH BOUNDARY ──────────────────────────
+function pickTown() {
+  if (!dataLoaded) return;
   if (!availableTowns.length) availableTowns = allTowns.slice();
-  const idx = Math.floor(Math.random() * availableTowns.length);
-  currentTown = availableTowns.splice(idx,1)[0];
-  document.getElementById("townName").textContent = currentTown.name;
+
+  currentTown = availableTowns.splice(
+    Math.floor(Math.random() * availableTowns.length), 1
+  )[0];
+  document.getElementById('townName').textContent = currentTown.name;
   townBoundary = null;
 
-  // fetch boundary via Overpass
-  const query = `
-    [out:json][timeout:25];
-    area["ISO3166-1"="HU"][admin_level=2]->.h;
-    relation["boundary"="administrative"]["admin_level"="8"]
-      ["name"="${currentTown.name}"](area.h);
-    out geom;
-  `;
-  fetch("https://overpass-api.de/api/interpreter", {
-    method: "POST",
-    headers: { "Content-Type": "text/plain" },
-    body: query
+  fetch(
+    `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(currentTown.name)}` +
+    `&country=Hungary&format=json&polygon_geojson=1`
+  )
+  .then(res => res.ok ? res.json() : Promise.reject())
+  .then(data => {
+    if (data.length) townBoundary = { type:'Feature', geometry:data[0].geojson };
   })
-    .then(r => r.ok ? r.json() : Promise.reject(r.status))
-    .then(data => {
-      const el = data.elements && data.elements[0];
-      if (el && el.geometry) {
-        // convert Overpass to GeoJSON
-        const coords = el.geometry.map(pt => [pt.lat, pt.lon]);
-        townBoundary = {
-          type: "Feature",
-          geometry: { type: "Polygon", coordinates: [coords] }
-        };
-      }
-    })
-    .catch(() => {
-      // boundary not available or rate‐limited
-      townBoundary = null;
-    });
+  .catch(() => {});
 }
 
-// ── HANDLE A GUESS ─────────────────────────────────────────────
-function handleGuess(e){
-  if (!currentTown || currentRound >= numRounds) return;
+// ── HANDLE GUESS ──────────────────────────────────────────────
+function handleGuess(e) {
+  if (!currentTown) return;
+  [guessMarker, actualMarker, boundaryLayer, guessBoundaryLayer, lineLayer]
+    .forEach(l => l && map.removeLayer(l));
 
-  // clear old layers
-  [guessMarker, actualMarker, boundaryLayer, lineLayer].forEach(l=>l&&map.removeLayer(l));
-
-  // place guess marker
   const guessed = [e.latlng.lat, e.latlng.lng];
-  guessMarker = L.marker(guessed)
-    .addTo(map)
-    .bindPopup("Your guess")
-    .openPopup();
+  guessMarker = L.marker(guessed).addTo(map);
 
-  // place actual marker
-  const actual = [+currentTown.lat, +currentTown.lng];
-  actualMarker = L.marker(actual)
-    .addTo(map)
-    .bindPopup(`Actual: ${currentTown.name}`);
+  fetch(
+    `https://nominatim.openstreetmap.org/reverse?format=json&polygon_geojson=0` +
+    `&lat=${guessed[0]}&lon=${guessed[1]}`
+  )
+  .then(res => res.ok ? res.json() : Promise.reject())
+  .then(data => {
+    const name = data.address?.town||
+                 data.address?.village||
+                 data.address?.city||
+                 data.name||
+                 'Unknown';
+    guessMarker.bindPopup(
+      `${t('guessed')} <strong>${name}</strong>`
+    ).openPopup();
+    return fetch(
+      `https://nominatim.openstreetmap.org/search?city=${encodeURIComponent(name)}` +
+      `&country=Hungary&format=json&polygon_geojson=1`
+    );
+  })
+  .then(res => res.ok ? res.json() : Promise.reject())
+  .then(data => {
+    if (data.length && data[0].geojson) {
+      guessBoundaryLayer = L.geoJSON(data[0].geojson, {
+        style:{ color:'red', weight:2, fill:false }
+      }).addTo(map);
+    }
+  })
+  .catch(() => {});
 
-  // draw boundary if enabled
+  const actual = [currentTown.lat, currentTown.lng];
+  actualMarker = L.marker(actual).addTo(map);
+  actualMarker.bindTooltip(
+    `<strong>${currentTown.name}</strong>`,
+    { permanent:true, direction:'right', offset:[10,0] }
+  );
+
   if (showBoundary && townBoundary) {
     boundaryLayer = L.geoJSON(townBoundary, {
-      style: { color:"green", fillColor:"#3f3", fillOpacity:0.2, weight:2 }
+      style:{ color:'green', fillColor:'#3f3', fillOpacity:0.2, weight:2 }
     }).addTo(map);
   }
 
-  // draw connecting line + label
-  const dist = distanceKm(guessed[0],guessed[1], actual[0],actual[1]);
-  lineLayer = L.polyline([guessed, actual], { color:"red", weight:2 })
+  const dist = distanceKm(...guessed, ...actual);
+  lastDist = dist;
+  lineLayer = L.polyline([guessed, actual], { color:'red', weight:2 })
     .addTo(map)
     .bindTooltip(`${dist.toFixed(2)} km`, {
-      permanent: true, direction: "center", className: "distance-label"
+      permanent:true, direction:'center', className:'distance-label'
     });
 
-  // zoom to include both points (and boundary)
   let bounds = L.latLngBounds(guessed, actual);
-  if (boundaryLayer) bounds = bounds.extend(boundaryLayer.getBounds());
+  if (boundaryLayer)      bounds = bounds.extend(boundaryLayer.getBounds());
+  if (guessBoundaryLayer) bounds = bounds.extend(guessBoundaryLayer.getBounds());
   map.fitBounds(bounds.pad(0.3));
 
-  // feedback & scoring
-  const fbEl = document.getElementById("feedback");
-  if (dist <= 2) fbEl.textContent = "✅ Within town!";
-  else if (showDistance) fbEl.textContent = `❌ ${dist.toFixed(2)} km off.`;
-  else fbEl.textContent = "";
+  const feedbackEl = document.getElementById('feedback');
+  feedbackEl.textContent = dist <= 2
+    ? t('withinTown')
+    : (showDistance ? t('offBy', { dist: dist.toFixed(2) }) : '');
 
   if (dist > 2) scores[currentPlayer] += dist;
+
   currentPlayer = (currentPlayer + 1) % numPlayers;
-  currentRound++;
-  document.getElementById("playerNum").textContent = currentPlayer + 1;
+  if (currentPlayer === 0) currentRound++;
+
+  document.getElementById('playerNum').textContent = currentPlayer + 1;
   updateScoreboard();
   updateRoundInfo();
 
-  // end‐of‐game check
-  if (currentRound >= numRounds) {
-    alert("🏁 Game over!\n" +
-      scores.map((s,i)=>`Player ${i+1}: ${s.toFixed(2)} km`).join("\n")
+  if (currentRound > numRounds) {
+    alert(
+      t('gameOver') +
+      "\n" +
+      scores.map((s,i) => `${t('player')} ${i+1}: ${s.toFixed(2)} km`).join("\n")
     );
     map.off('click', handleGuess);
     return;
   }
 
-  pickTown();
+  map.off('click', handleGuess);
+  document.getElementById('btnNext').disabled = false;
 }
 
-// ── INITIALIZATION ─────────────────────────────────────────────
-function initGame(){
-  // read settings
-  numPlayers   = +document.getElementById("inpPlayers").value;
-  numRounds    = +document.getElementById("inpRounds").value;
-  showBoundary = document.getElementById("chkBoundary").checked;
-  showDistance = document.getElementById("chkDistance").checked;
+// ── INITIALIZE GAME ───────────────────────────────────────────
+function initGame() {
+  numPlayers   = +document.getElementById('inpPlayers').value;
+  numRounds    = +document.getElementById('inpRounds').value;
+  showBoundary = document.getElementById('chkBoundary').checked;
+  showDistance = document.getElementById('chkDistance').checked;
+  currentLang  = document.getElementById('selLang').value;
 
-  scores = Array(numPlayers).fill(0);
+  scores        = Array(numPlayers).fill(0);
   currentPlayer = 0;
-  currentRound  = 0;
-  document.getElementById("playerNum").textContent = "1";
+  currentRound  = 1;
+  document.getElementById('playerNum').textContent = '1';
   updateScoreboard();
   updateRoundInfo();
+  applyTranslations();
+
+  document.getElementById('btnNext').disabled = true;
 
   if (!map) {
     map = L.map('map').setView([47,19.5],7);
     L.tileLayer(
       'https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png',
-      { attribution:'&copy; CARTO', subdomains:'abcd', maxZoom:19 }
+      { attribution:'© CARTO', subdomains:'abcd', maxZoom:19 }
     ).addTo(map);
   }
+
   map.off('click', handleGuess);
   map.on('click', handleGuess);
 
   pickTown();
 }
 
-// ── SETTINGS UI BINDINGS ───────────────────────────────────────
-document.getElementById("btnSettings").onclick = () =>
-  document.getElementById("settings").classList.toggle("open");
-document.getElementById("btnApply").onclick = () =>
-  document.getElementById("settings").classList.remove("open");
-document.getElementById("btnStart").onclick = initGame;
+// ── NEXT ROUND HANDLER ────────────────────────────────────────
+function nextRound() {
+  [guessMarker, actualMarker, boundaryLayer, guessBoundaryLayer, lineLayer]
+    .forEach(l => l && map.removeLayer(l));
+  document.getElementById('feedback').textContent = '';
 
-// ── FETCH TOWNS & PREPARE ──────────────────────────────────────
-fetch(
-  `https://secure.geonames.org/searchJSON` +
-  `?country=HU&featureClass=P&maxRows=1000&username=${geoNamesUsername}`
-)
-  .then(r => r.json())
-  .then(data => {
-    allTowns = data.geonames.map(t => ({
-      name: t.name,
-      lat:  t.lat,
-      lng:  t.lng
-    }));
-    availableTowns = allTowns.slice();
-  })
-  .catch(err => {
-    console.error("GeoNames fetch failed:", err);
-    alert("Could not load town list. Check your GeoNames username.");
-  });
+  document.getElementById('btnNext').disabled = true;
+  applyTranslations();
+  pickTown();
+  map.on('click', handleGuess);
+}
+
+// ── UI BINDINGS ───────────────────────────────────────────────
+document.getElementById('btnStart').onclick = initGame;
+document.getElementById('btnNext').addEventListener('click', nextRound);
+document.getElementById('btnSettings').onclick = () =>
+  document.getElementById('settings').classList.toggle('open');
+document.getElementById('btnApply').onclick = () =>
+  document.getElementById('settings').classList.remove('open');
+
+// Instant language switch
+document.getElementById('selLang').addEventListener('change', e => {
+  currentLang = e.target.value;
+  applyTranslations();
+  if (lastDist != null) {
+    const feedbackEl = document.getElementById('feedback');
+    feedbackEl.textContent = lastDist <= 2
+      ? t('withinTown')
+      : (showDistance ? t('offBy', { dist: lastDist.toFixed(2) }) : '');
+  }
+});
+
+// Apply translations on load
+window.addEventListener('DOMContentLoaded', applyTranslations);
